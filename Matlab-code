@@ -1,0 +1,139 @@
+N = 10; % the number of time slots
+H = 100; % height
+D = 2000; % distance between source and destination
+E = 1000;
+S = 100;
+x0 = 200;
+y0 = -100;
+xF = 1800;
+yF = -100;
+l = 0;
+gain= 1; % channel power gain at the reference distance d0 = 1 m
+noise = 10^(-50/10-3);
+gama0= gain./noise;
+Pr = 10^(40/10-3);  %50
+Ps=Pr;
+Lmax=5000;
+x_k = zeros(1,N);
+y_k = zeros(1,N);
+pr_k = zeros(1,N);
+ps_k = zeros(1,N);
+drd_k =zeros(1,N);
+drd1_k =zeros(1,N);
+dre_k =zeros(1,N);
+drs_k =zeros(1,N);
+clc
+for i = 1:1:N
+    x_k(i) = x0+(i-1)*(xF-x0)./N;
+end
+
+for i = 1:1:N
+    y_k(i)= y0;
+end
+
+drd_k= (x_k-D).^2+y_k.^2+H^2;
+drd1_k= (x_k-D).^2+y_k.^2+H^2;
+dre_k= (x_k-E).^2+(y_k-S).^2+H^2;
+drs_k= x_k.^2+y_k.^2+H^2;
+
+for i = 1:1:N-1
+    ps_k(i)= Ps./N;
+end
+for i = 2:1:N
+    pr_k(i)= Pr./N;
+end
+x=sdpvar(1,N);
+y=sdpvar(1,N);
+pr=sdpvar(1,N);
+ps=sdpvar(1,N);
+drd=sdpvar(1,N);
+dre=sdpvar(1,N);
+drs=sdpvar(1,N);
+drd1=sdpvar(1,N);
+a_pr=sdpvar(1,N);
+a_ps=sdpvar(1,N);
+a_e=sdpvar(1,N);
+b_e=sdpvar(1,N);
+a_d=sdpvar(1,N);
+b_d=sdpvar(1,N);
+% Error: location of functions,
+
+cons= [];
+while(1)
+    for n = 2:N
+        Rdup_total= sum((1/log(2))*log(1+gama0.*pr_k(2:n)./drd1_k(2:n))) + sum(((1/log(2))*drd1_k(2:n)./(drd1_k(2:n)+gama0.*pr_k(2:n))).*((gama0./(2*pr_k(2:n))).*a_d(2:n)+(gama0.*pr_k(2:n)/2).*b_d(2:n)-gama0.*pr_k(2:n)./drd1_k(2:n)));
+        Reup_total= sum((1/log(2))*log(1+gama0.*pr_k(2:n)./dre_k(2:n)))  + sum(((1/log(2))*dre_k(2:n)./(dre_k(2:n)+gama0.*pr_k(2:n))).*((gama0./(2*pr_k(2:n))).*a_e(2:n)+(gama0.*pr_k(2:n)/2).*b_e(2:n)-gama0.*pr_k(2:n)./dre_k(2:n)));
+        Rrlb_total= sum((1/log(2))*log(1+gama0.*ps_k(1:n-1)./drs_k(1:n-1)))+ sum(((1/log(2))*gama0.*ps_k(1:n-1)./(drs_k(1:n-1)+gama0.*ps_k(1:n-1))).*(2-ps_k(1:n-1).*a_ps(1:n-1)-drs(1:n-1)./drs_k(1:n-1)));
+        %constraints Rd<Rr, Re<Rr
+        
+        cons=[cons,cone([(a_e(n)-dre(n)); 2*pr(n)],(a_e(n)+dre(n)))];
+        cons=[cons,cone([(b_e(n)-dre(n)); 2],(b_e(n)+dre(n)))];
+        cons=[cons,cone([(a_d(n)-drd1(n)); 2*pr(n)],(a_d(n)+drd1(n)))];
+        cons=[cons,cone([(b_d(n)-drd1(n)); 2],(b_d(n)+drd1(n)))];
+        
+        cons=[cons, Rdup_total <= Rrlb_total];
+        cons=[cons, Reup_total <= Rrlb_total];
+    end
+    
+    for n=1:N
+        cons=[cons, cone([(x(n)-D); y(n);(drd(n)-H^2-1/4)],(drd(n)-H^2+1/4))];
+        cons=[cons, dre(n) <= (x_k(n)-E).^2+(y_k(n)-S).^2+H.^2+2*(x_k(n)-E).*(x(n)-x_k(n))+2*(y_k(n)-S).*(y(n)-y_k(n))];
+        cons=[cons, drd1(n) <= (x_k(n)-D).^2+y_k(n).^2+H.^2+2*(x_k(n)-D).*(x(n)-x_k(n))+2*y_k(n).*(y(n)-y_k(n))];
+        cons=[cons, cone([x(n); y(n);(drs(n)-H^2-1/4)],(drs(n)-H^2+1/4))];
+        cons=[cons, dre(n) >=0, drd1(n) >=0];
+       
+    end
+    % Power constraints
+    cons=[cons,sum(ps(1:N-1)) <= Ps.*N];
+    cons=[cons,sum(pr(2:N)) <= Pr.*N];
+    for n=1:N-1
+        cons=[cons,cone([(a_ps(n)-ps(n)); 2],(a_ps(n)+ps(n)))];
+        cons=[cons,ps(n)>=0];
+    end
+    for n=2:N
+        cons=[cons,cone([(a_pr(n)-pr(n)); 2],(a_pr(n)+pr(n)))];
+        cons=[cons,pr(n)>=0];
+    end
+    % Trajectory constraints
+    cons=[cons,cone([(x(1)-x0); (y(1)-y0)], Lmax)];
+    for n = 1:N-1
+        cons=[cons,cone([(x(n+1)-x(n)); (y(n+1)-y(n))], Lmax)];
+    end
+    cons=[cons,cone([(xF-x(N)); (yF-y(N))],Lmax)];
+    
+    Rdlb_total= sum((1/log(2))*log(1+gama0.*pr_k(2:N)./drd_k(2:N))) + sum(((1/log(2))*gama0.*pr_k(2:N)./(drd_k(2:N)+gama0.*pr_k(2:N))).*(2-pr_k(2:N).*a_pr(2:N)-drd(2:N)./drd_k(2:N)));
+    Reup_total= sum((1/log(2))*log(1+gama0.*pr_k(2:N)./dre_k(2:N))) + sum(((1/log(2))*dre_k(2:N)./(dre_k(2:N)+gama0.*pr_k(2:N))).*((gama0./(2*pr_k(2:N))).*a_e(2:N)+(gama0.*pr_k(2:N)/2).*b_e(2:N)-gama0.*pr_k(2:N)./dre_k(2:N)));
+    
+    Objective = Rdlb_total - Reup_total;
+    options = sdpsettings('verbose',0,'debug',0,'showprogress',0,'solver','mosek');
+    sol= solvesdp(cons,-Objective,options); %solvesdp -Objective,options
+    solution = value(Objective)
+    sol.info
+    %check(cons)
+    
+    x_k=value(x);
+    y_k=value(y);
+    
+    ps_k=value(ps);
+    pr_k=value(pr);
+    drd_k = value(drd);
+    drd1_k = value(drd1);
+    dre_k = value(dre);
+    drs_k = value(drs);
+    
+    a12=value(drd_k);
+    a13=value(drd1_k);
+    a14=value(dre_k);
+    a15=value(drs_k);
+    
+    l = l + 1;
+    a1=value(x);
+    a2=value(y);
+    disp(l)
+    hold on
+    plot(a1,a2)
+    if (l==7) %(norm(xichma) <= 10^-1) && (norm(lamda) <= 10^-1)
+        break;
+    end
+end
+
